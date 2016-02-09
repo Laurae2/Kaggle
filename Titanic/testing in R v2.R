@@ -9,6 +9,8 @@ library(stringr)
 library(plyr)
 library(doParallel) #do not parallelize because it creates major issues
 
+str(model_list1)
+
 #~~~~ clean up
 
 remove(list = ls())
@@ -17,10 +19,11 @@ remove(list = ls())
 
 #~~~~ what methods?
 set.seed(11111) #ensures reproductability
-methodUsed <- c("rpart2", "xgbTree", "gbm", "C5.0", "glmboost")
+methodUsed <- c("rf", "rpart", "rpart2", "xgbTree", "gbm", "C5.0", "glmboost")
 preProcessing <- c("center", "scale", "YeoJohnson", "nzv")
 oldinputCSV = "Testing.csv"
 newinputCSV = "Testing2.csv"
+samplingMethod = "adaptive_cv" #adaptive_cv is good and faster, repeatedcv is best (caretEnsemble)
 
 #~~~~ preprocessing methods:
 #center = mean reduction (any value)
@@ -48,11 +51,13 @@ newinputCSV = "Testing2.csv"
 
 #~~ how many tunings per model? (mutliplicated by CV folds x repeats x number of parameters of the specific model)
 tune <- c(0)
-tune[1] <- 25
-tune[2] <- 5
-tune[3] <- 10
+tune[1] <- 5
+tune[2] <- 50
+tune[3] <- 50
 tune[4] <- 5
 tune[5] <- 10
+tune[6] <- 25
+tune[7] <- 10
 print(cbind(methodUsed, tune))
 
 specs = c("0")
@@ -62,10 +67,8 @@ for(i in 1:length(methodUsed)){
 
 randomness = c(0)
 for(i in 1:length(methodUsed)){
-  randomness[i] <- TRUE
+  randomness[i] <- FALSE #recommended
 }
-randomness[4] <- FALSE #disables randomness for C5.0 because it crashes
-
 
 #~~~~~ for each index, what columns? (single tuning)
 #col = c(0) #deprecated, not working
@@ -131,6 +134,12 @@ CVfolds = 5
 #C5.0Tree = Single C5.0 Tree (0.84, 0 param)
 #C5.0Rules = Single C5.0 Ruleset (0.86, 0 param)
 #nnet = Neural Network (3.12, 2 param)
+
+#randomness is not working (well) for the following models and must be turned off: ada, AdaBag,
+#AdaBoost.M1, bagEarth, blackboost, blasso, BstLm, bstSm, bstTree, C5.0, C5.0Cost, cubist, earth
+#enet, foba, gamboost, gbm, glmboost, glmnet, kernelpls, lars, lars2, lasso, lda2, leapBackward
+#leapForward, leapSeq, LogitBoost, pam, partDSA, pcr, PenalizedLDA, pls, relaxo, rfRules
+#rotationForest, rotationForestCp, rpart, rpart2, rpartCost, simpls, spikeslab, superpc, widekernelpls, xgbTree
 
 #many methods
 #ada = boosted classification trees
@@ -350,6 +359,9 @@ train <- train[ inTrainingSet,]
 
 #~~ launching model
 
+#same sampling strategy
+indexPreds <- createMultiFolds(train$Survived, CVfolds, CVrepeats)
+
 #caret method
 for(i in 1:length(methodUsed)){
   print(paste("Doing ", methodUsed[i], "(", i, ")", sep = ""))
@@ -366,9 +378,9 @@ for(i in 1:length(methodUsed)){
   cl <- makeCluster(2)
   registerDoParallel()
   if(randomness[i] == 1) {
-    ctrl <- trainControl(method = "adaptive_cv", repeats = CVrepeats, number = CVfolds, savePredictions = TRUE, classProbs = TRUE, index = createMultiFolds(train$Survived, CVfolds, CVrepeats), search = "random")
+    ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, returnResamp = "all", savePredictions = "all", classProbs = TRUE, index = indexPreds, search = "random")
   } else {
-    ctrl <- trainControl(method = "adaptive_cv", repeats = CVrepeats, number = CVfolds, savePredictions = TRUE, classProbs = TRUE, index = createMultiFolds(train$Survived, CVfolds, CVrepeats))
+    ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, returnResamp = "all", savePredictions = "all", classProbs = TRUE, index = indexPreds)
   }
   set.seed(11111) #ensures reproductability
   assign(tempVarName1, train(Survived ~ ., data = train_temp, method = methodUsed[i], trControl = ctrl, tuneLength = tune[i]))
@@ -459,10 +471,14 @@ write.csv(gendermodel, file = newinputCSV, row.names = FALSE)
 
 #~~~~ another predictive usage possibility using caretEnsemble, more accurate very quickly
 
+#~~~~~~~~~~ if you have models NOT separeted, do this ~~~~~~~~~~~~
+
+indexPreds <- createMultiFolds(train$Survived, CVfolds, CVrepeats)
+
 if (length(randomness[randomness == 0]) == 0) {
-  ctrl <- trainControl(method = "adaptive_cv", repeats = CVrepeats, number = CVfolds, savePredictions = "final", classProbs = TRUE, index = createMultiFolds(train$Survived, CVfolds, CVrepeats), search = "random")
+  ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, savePredictions = "final", classProbs = TRUE, index = indexPreds, search = "random")
 } else {
-  ctrl <- trainControl(method = "adaptive_cv", repeats = CVrepeats, number = CVfolds, savePredictions = "final", classProbs = TRUE, index = createMultiFolds(train$Survived, CVfolds, CVrepeats))
+  ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, savePredictions = "final", classProbs = TRUE, index = indexPreds)
 }
 tempVarName = paste("list(", specs[1], sep = "")
 if (length(methodUsed) != 1) {
@@ -475,10 +491,25 @@ tuningValue <- eval(parse(text = noquote(tuningValue <- tempVarName)))
 set.seed(11111) #ensures reproductability
 multimodel <- caretList(Survived ~ ., data = train, trControl = ctrl, methodList = methodUsed, tuneList = tuningValue)
 #ctrlmulti <- trainControl(number = 2, classProbs = TRUE, summaryFunction = twoClassSummary)
+
+#~~~~~~~~~~ if you have models SEPARATED (due to using the code to create models separately), do this ~~~~~~~~~~~~
+
+multimodel <- list(rpart2 = model_list1, xgbTree = model_list2, gbm = model_list3, C5.0 = model_list4, glmboost = model_list5)
+class(multimodel) <- "caretList"
+
+#~~~~~~~~~~ END SEPARATION ~~~~~~~~~~
+
+#~~ make ensemble
+
 multiensemble <- caretEnsemble(multimodel)
 summary(multiensemble)
-predictedValues <- predict(multiensemble, newdata = test, type = "raw")
+
+#if classified ensemble of classifications then returns prob (if prob is set) else returns raw
+#if regressed ensemble of classifications then returns raw
+#do not pass type value, it does automatically depending on the tree shown higher (depends on ctrlmulti)
+predictedValues <- predict(multiensemble, newdata = test)
 gendermodel <- read.table("gendermodel.csv", sep = ",", header = TRUE)
+
 #gendermodel$Survived[predictedValues < 0.50] <- 0
 #gendermodel$Survived[predictedValues >= 0.50] <- 1
 oldgendermodel <- read.table(oldinputCSV, sep = ",", header = TRUE)
