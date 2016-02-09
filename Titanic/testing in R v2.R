@@ -65,7 +65,7 @@ randomness = c(0)
 for(i in 1:length(methodUsed)){
   randomness[i] <- TRUE
 }
-randomness[3] <- FALSE #disables randomness for C5.0 because it crashes
+randomness[4] <- FALSE #disables randomness for C5.0 because it crashes
 
 
 #~~~~~ for each index, what columns? (single tuning)
@@ -455,13 +455,6 @@ write.csv(gendermodel, file = newinputCSV, row.names = FALSE)
 
 
 
-
-tuning <- list(
-  rf1=caretModelSpec(method="rf", tuneGrid=data.frame(.mtry=2)),
-  rf2=caretModelSpec(method="rf", tuneGrid=data.frame(.mtry=10), preProcess="pca"),
-  nn=caretModelSpec(method="nnet", tuneLength=2, trace=FALSE)
-)
-tuning
 
 
 
