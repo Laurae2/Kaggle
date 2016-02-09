@@ -7,9 +7,9 @@ library(caretEnsemble)
 library(Amelia)
 library(stringr)
 library(plyr)
+library(dplyr)
+library(tidyr)
 library(doParallel) #do not parallelize because it creates major issues
-
-str(model_list1)
 
 #~~~~ clean up
 
@@ -18,12 +18,13 @@ remove(list = ls())
 #~~~~~~~~~~~~~~ USER INPUT ~~~~~~~~~~~~~~
 
 #~~~~ what methods?
-set.seed(11111) #ensures reproductability
+seedingValue = 11111 #ensures reproductability
 methodUsed <- c("rf", "rpart", "rpart2", "xgbTree", "gbm", "C5.0", "glmboost")
+targetUsed = "ROC" #Accuracy when N>>P, Balanced Accuracy when P>>N, Kappa when unbalanced classes
 preProcessing <- c("center", "scale", "YeoJohnson", "nzv")
 oldinputCSV = "Testing.csv"
 newinputCSV = "Testing2.csv"
-samplingMethod = "adaptive_cv" #adaptive_cv is good and faster, repeatedcv is best (caretEnsemble)
+samplingMethod = "repeatedcv" #adaptive_cv is good and faster, repeatedcv is best (caretEnsemble) and reliable ($besttune error)
 
 #~~~~ preprocessing methods:
 #center = mean reduction (any value)
@@ -59,6 +60,7 @@ tune[5] <- 10
 tune[6] <- 25
 tune[7] <- 10
 print(cbind(methodUsed, tune))
+ensembleTune <- 10
 
 specs = c("0")
 for(i in 1:length(methodUsed)){
@@ -378,12 +380,12 @@ for(i in 1:length(methodUsed)){
   cl <- makeCluster(2)
   registerDoParallel()
   if(randomness[i] == 1) {
-    ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, returnResamp = "all", savePredictions = "all", classProbs = TRUE, index = indexPreds, search = "random")
+    ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, verboseIter = TRUE, returnResamp = "all", savePredictions = "all", classProbs = TRUE, summaryFunction = twoClassSummary, index = indexPreds, search = "random")
   } else {
-    ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, returnResamp = "all", savePredictions = "all", classProbs = TRUE, index = indexPreds)
+    ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, verboseIter = TRUE, returnResamp = "all", savePredictions = "all", classProbs = TRUE, summaryFunction = twoClassSummary, index = indexPreds)
   }
-  set.seed(11111) #ensures reproductability
-  assign(tempVarName1, train(Survived ~ ., data = train_temp, method = methodUsed[i], trControl = ctrl, tuneLength = tune[i]))
+  set.seed(seedingValue) #ensures reproductability
+  assign(tempVarName1, train(Survived ~ ., data = train_temp, method = methodUsed[i], metric = "ROC", trControl = ctrl, tuneLength = tune[i]))
   stopCluster(cl)
   registerDoSEQ()
   closeAllConnections()
@@ -435,8 +437,8 @@ print(confMatrices, digits = 4)
 #confusionMatrix(Pred, test$Survived)
 
 #real prediction but on all data set
-i <- which(confMatrices == max(confMatrices["Accuracy",]), arr.ind = TRUE)[1,2]
-print(paste("Best method found is: ", methodUsed[i], ", with Accuracy = ", round(max(confMatrices["Accuracy",]), 4), sep = ""))
+i <- which(confMatrices == max(confMatrices[targetUsed,]), arr.ind = TRUE)[1,2]
+print(paste("Best method found is: ", methodUsed[i], ", with ", targetUsed, " = ", round(max(confMatrices["Accuracy",]), 4), sep = ""))
 tempVarName2 <- paste("col", i, sep = "")
 tempVarName3 <- "bin"
 train_temp <- train2[, c("Survived", get(tempVarName2))]
@@ -488,21 +490,48 @@ if (length(methodUsed) != 1) {
 }
 tempVarName <- paste(tempVarName, ")", sep = "")
 tuningValue <- eval(parse(text = noquote(tuningValue <- tempVarName)))
-set.seed(11111) #ensures reproductability
-multimodel <- caretList(Survived ~ ., data = train, trControl = ctrl, methodList = methodUsed, tuneList = tuningValue)
+set.seed(seedingValue) #ensures reproductability
+cl <- makeCluster(2)
+registerDoParallel()
+multimodel <- caretList(Survived ~ ., data = train, trControl = ctrl, tuneList = tuningValue)
+stopCluster(cl)
+registerDoSEQ()
+closeAllConnections()
 #ctrlmulti <- trainControl(number = 2, classProbs = TRUE, summaryFunction = twoClassSummary)
 
 #~~~~~~~~~~ if you have models SEPARATED (due to using the code to create models separately), do this ~~~~~~~~~~~~
 
-multimodel <- list(rpart2 = model_list1, xgbTree = model_list2, gbm = model_list3, C5.0 = model_list4, glmboost = model_list5)
+tempVarName = paste("list(", methodUsed[1], " = model_list1", sep = "")
+for(i in 2:length(methodUsed)){
+  tempVarName = paste(tempVarName, ", ", methodUsed[i], " = model_list", i , sep = "")
+}
+tempVarName = paste(tempVarName, ")", sep = "")
+multimodel <- eval(parse(text = tempVarName))
+#multimodel <- list(rpart2 = model_list1, xgbTree = model_list2, gbm = model_list3, C5.0 = model_list4, glmboost = model_list5)
 class(multimodel) <- "caretList"
+
+if(randomness[i] == 1) {
+  ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, verboseIter = TRUE, returnResamp = "all", savePredictions = "all", classProbs = TRUE, summaryFunction = twoClassSummary, index = indexPreds, search = "random")
+} else {
+  ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, verboseIter = TRUE, returnResamp = "all", savePredictions = "all", classProbs = TRUE, summaryFunction = twoClassSummary, index = indexPreds)
+}
 
 #~~~~~~~~~~ END SEPARATION ~~~~~~~~~~
 
-#~~ make ensemble
+#~~ make ensemble ~~ CHOOSE ###
 
-multiensemble <- caretEnsemble(multimodel)
+#cannot use tuneLength
+multiensemble <- caretStack(multimodel, method = "glm", metric = targetUsed, trControl = ctrl) #do not use caretEnsemble because it bugs the Summary
+summary(multiensemble) #summary beforehand
+class(multiensemble) <- "caretEnsemble" #return to caretEnsemble
+summary(multiensemble) #summary afterhand
+
+#~~ make stack ~~~ CHOOSE ###
+
+multiensemble <- caretStack(multimodel, method = "gbm", tuneLength = ensembleTune, metric = targetUsed, trControl = ctrl)
 summary(multiensemble)
+
+#~~ END CHOOSE ###
 
 #if classified ensemble of classifications then returns prob (if prob is set) else returns raw
 #if regressed ensemble of classifications then returns raw
@@ -516,3 +545,145 @@ oldgendermodel <- read.table(oldinputCSV, sep = ",", header = TRUE)
 print("Difference of predictions: Not different")
 print(count(oldgendermodel$Survived == gendermodel$Survived))
 write.csv(gendermodel, file = newinputCSV, row.names = FALSE)
+
+
+
+#~~~~~ ANALYSIS OF VARIABLES ~~~~
+
+
+#~~ data set analysis
+
+
+#~ finds out variable importance (independent/predictors, dependent/predicted), read only one column because reading both is not useful
+filterVarImp(data.matrix(train[,-1]),train[,1])
+
+#~ finds linear combinations of numeric variables, requires removing non-numeric variables
+findLinearCombos(data.matrix(train)) #trim.matrix...?
+
+#~ near zero varince variables, numeric data only
+nearZeroVar(data.matrix(train), names = TRUE)
+
+#~ Recursive Feature Elimination (automatic analysis of predictors)
+rfRFE_ctrl <- rfeControl(functions = caretFuncs, method = "repeatedcv", number = 5, repeats = 1, verbose = TRUE, returnResamp = "all")
+subsetSize <- c(1:9)
+set.seed(seedingValue)
+rfProfile <- rfe(train[, -1], train[, 1], sizes = subsetSize, method = "rf", rfeControl = rfRFE_ctrl)
+print(rfProfile)
+print(rfProfile$fit$finalModel$variable.importance)
+#plots
+plot(rfProfile, type = c("o", "g")) #normal plot with Accuracy
+plot(rfProfile, type = c("o", "g"), metric = "Kappa") #normal plot but with Kappa coefficient
+plot(rfProfile, type = c("g", "p", "smooth")) #smoothed plot
+densityplot(rfProfile, as.table = TRUE, pch = "|") #density
+ggplot(rfProfile) #normal plot
+ggplot(data = as.data.frame(rfProfile$variables)[order(rfProfile$variables$Variables),], aes(x = var, y = Overall, fill = as.factor(sort(rfProfile$variables$Variables)))) + geom_bar(stat = "identity") + labs(fill = "Variables")
+
+#~ Selection By Filtering (automatic analysis of predictors)
+rfSBF_ctrl <- caretSBF
+rfSBF_ctrl$score <- function(x, y) apply(x, 2, caretSBF$score, y = y)
+set.seed(seedingValue)
+sfProfile <- sbf(train[, -1], train[, 1], method = "rpart2", sbfControl = sbfControl(functions = rfSBF_ctrl, method = "repeatedcv", number = 5, repeats = 1, multivariate = TRUE, verbose = TRUE, returnResamp = "all"))
+print(sfProfile)
+
+#~ Selection by Genetic Algorithm (automatic analysis of predictors) | seed 2nd argument = number*repeats (of the CV)
+rfGA_ctrl <- gafsControl(functions = caretGA, method = "repeatedcv", number = 2, repeats = 1, seeds = sample.int(seedingValue, 3), verbose = TRUE, returnResamp = "all")
+set.seed(seedingValue)
+rfProfile <- gafs(x = train[, -1], train[, 1], iters = 2, method = "rpart2", gafsControl = rfGA_ctrl)
+print(rfProfile)
+plot(rfProfile)
+
+#~ Simulated Annealing (automatic analysis of predictors)
+rfSA_ctrl <- safsControl(functions = caretSA, method = "repeatedcv", number = 5, repeats = 1, improve = 10, verbose = TRUE, returnResamp = "all")
+set.seed(seedingValue)
+saProfile <- safs(x = train[, -1], train[, 1], iters = 300, safsControl = rfSA_ctrl, method = "rpart2")
+print(saProfile)
+plot(saProfile)
+
+
+#~~ single analysis of a model
+
+
+#~ plot a model depending on a tuning method
+i <- 4
+tempVarName <- paste("model_list", i, sep = "")
+plot(get(tempVarName))
+histogram(get(tempVarName))
+densityplot(get(tempVarName))
+xyplot(get(tempVarName))
+stripplot(get(tempVarName))
+
+#~ multiplot analysis (lattice)
+
+#method 1
+pList <- list(p1 = histogram(get(tempVarName)), p2 = densityplot(get(tempVarName)), p3 = xyplot(get(tempVarName)), p4 = stripplot(get(tempVarName)))
+print(pList$p1, split = c(1, 1, 2, 2), more = TRUE)
+print(pList$p2, split = c(2, 1, 2, 2), more = TRUE)
+print(pList$p3, split = c(1, 2, 2, 2), more = TRUE)
+print(pList$p4, split = c(2, 2, 2, 2), more = FALSE)  # more = FALSE is redundant
+
+#method 2
+pList <- list(p1 = plot(get(tempVarName), plotType = "scatter", nameInStrip = TRUE), p2 = plot(get(tempVarName), plotType = "level", nameInStrip = TRUE))
+print(pList$p1, split = c(1, 1, 2, 1), more = TRUE)
+print(pList$p2, split = c(2, 1, 2, 1), more = FALSE)
+
+#~ plot analysis (ggplot2)
+ggplot(get(tempVarName), plotType = "scatter", nameInStrip = TRUE, highlight = TRUE) #scatter
+ggplot(get(tempVarName), plotType = "level", nameInStrip = TRUE, highlight = TRUE) #level
+
+#~ plot class probabilities
+pList <- list(p1 = resampleHist(get(tempVarName), type = "density"), p2 = resampleHist(get(tempVarName), type = "hist"))
+print(pList$p1, split = c(1, 1, 1, 2), more = TRUE)
+print(pList$p2, split = c(1, 2, 1, 2), more = FALSE)
+
+#~ analyze all models together (metric, sensitivity, specifity)
+resamp <- resamples(multimodel) #please coerce train models into variable multimodel
+print(resamp$timings) #get compute time required for each model
+
+#~analyze variable importance (1 model)
+plot(varImp(get(tempVarName))) #lattice
+ggplot(varImp(get(tempVarName))) #ggplot
+
+#another way
+predictors(model_list1)
+
+#~analyze variable importance (all models)
+tempVarName = paste("t(rbind.fill(as.data.frame(t(varImp(model_list", 1, ",scale = TRUE)$importance[,1, drop = FALSE]))", sep = "")
+for(i in 2:length(methodUsed)){
+  tempVarName = paste(tempVarName, ", as.data.frame(t(varImp(model_list", i, ",scale = TRUE)$importance[,1, drop = FALSE]))" , sep = "")
+}
+tempVarName = paste(tempVarName, "))", sep = "")
+model_varImp <- eval(parse(text = tempVarName))
+model_varImp[is.na(model_varImp)] <- 0
+colnames(model_varImp) <- methodUsed
+model_varImp <- as.data.frame(add_rownames(as.data.frame(model_varImp), "Variable"))
+model_varImp_Sorted <- gather(model_varImp, "Model", "Importance", 2:ncol(model_varImp))
+
+#plot histogram (max = models*100)
+ggplot(data = model_varImp_Sorted, aes(x = Variable, y = Importance, fill = Model)) + geom_bar(stat="identity")
+
+#plot vertically facetted histogram (max = 100)
+ggplot(data = model_varImp_Sorted, aes(x = Variable, y = Importance, fill = Model, alpha = Importance)) + geom_bar(stat="identity") + facet_grid(Model ~ .) + ylim(0, 100)
+
+#plot horizontally facetted histogram (max = 100)
+ggplot(data = model_varImp_Sorted, aes(x = Variable, y = Importance, fill = Model, alpha = Importance)) + geom_bar(stat="identity") + facet_grid(. ~ Model) + ylim(0, 100) + coord_flip()
+
+#plot box plot
+ggplot(data = model_varImp_Sorted, aes(x = Variable, y = Importance)) + geom_boxplot()
+
+
+
+#~~ ANALYSIS of caretEnsemble ~~
+
+#~ make plot for regressive models
+plot(multimodel) #for regressive models only
+fortify(multiensemble) #for regressive models only
+
+#~ makes a summary plot for regressive models
+#class(multiensemble) <- "caretEnsemble" #if convert to caretEnsemble from caretStack (glm model)
+plot(multiensemble)
+autoplot(multiensemble, which = c(1:6))
+
+#multiplot analysis (lattice)
+pList <- list(p1 = plot(multiensemble$ens_model, plotType = "scatter", nameInStrip = TRUE), p2 = plot(multiensemble$ens_model, plotType = "level", nameInStrip = TRUE))
+print(pList$p1, split = c(1, 1, 2, 1), more = TRUE)
+print(pList$p2, split = c(2, 1, 2, 1), more = TRUE)
