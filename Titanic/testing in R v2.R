@@ -17,7 +17,8 @@ remove(list = ls())
 
 #~~~~ what methods?
 set.seed(11111) #ensures reproductability
-methodUsed <- c("rpart2", "xgbTree", "gbm", "C5.0", "glmboost")
+#methodUsed <- c("rpart2", "xgbTree", "gbm", "C5.0", "glmboost")
+methodUsed <- c("C5.0", "glmboost")
 preProcessing <- c("center", "scale", "YeoJohnson", "nzv")
 oldinputCSV = "Testing.csv"
 newinputCSV = "Testing2.csv"
@@ -48,11 +49,11 @@ newinputCSV = "Testing2.csv"
 
 #~~ how many tunings per model? (mutliplicated by CV folds x repeats x number of parameters of the specific model)
 tune <- c(0)
-tune[1] <- 25
-tune[2] <- 5
-tune[3] <- 10
-tune[4] <- 5
-tune[5] <- 10
+#tune[1] <- 25
+#tune[2] <- 5
+#tune[3] <- 10
+#tune[4] <- 5
+#tune[5] <- 10
 print(cbind(methodUsed, tune))
 
 specs = c("0")
@@ -64,7 +65,7 @@ randomness = c(0)
 for(i in 1:length(methodUsed)){
   randomness[i] <- TRUE
 }
-#randomness[2] <- FALSE #disables randomness for xgbTree because it crashes
+randomness[3] <- FALSE #disables randomness for C5.0 because it crashes
 
 
 #~~~~~ for each index, what columns? (single tuning)
@@ -93,7 +94,7 @@ for(i in 1:length(methodUsed)){
 #bin5 <- NA
 
 #~~~~~ how many times to run Cross Validation?
-CVrepeats = 3
+CVrepeats = 5
 CVfolds = 5
 
 #modelLookup()[modelLookup()[,"probModel"] == TRUE,][, c("model","label")]
@@ -478,9 +479,9 @@ if (length(methodUsed) != 1) {
   }
 }
 tempVarName <- paste(tempVarName, ")", sep = "")
-tuning <- eval(parse(text = noquote(tuning <- tempVarName)))
+tuningValue <- eval(parse(text = noquote(tuningValue <- tempVarName)))
 set.seed(11111) #ensures reproductability
-multimodel <- caretList(Survived ~ ., data = train, trControl = ctrl, methodList = methodUsed, tuneList = tuning)
+multimodel <- caretList(Survived ~ ., data = train, trControl = ctrl, methodList = methodUsed, tuneList = tuningValue)
 #ctrlmulti <- trainControl(number = 2, classProbs = TRUE, summaryFunction = twoClassSummary)
 multiensemble <- caretEnsemble(multimodel)
 summary(multiensemble)
