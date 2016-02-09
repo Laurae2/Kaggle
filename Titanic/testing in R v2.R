@@ -17,8 +17,7 @@ remove(list = ls())
 
 #~~~~ what methods?
 set.seed(11111) #ensures reproductability
-#methodUsed <- c("rpart2", "xgbTree", "gbm", "C5.0", "glmboost")
-methodUsed <- c("C5.0", "glmboost")
+methodUsed <- c("rpart2", "xgbTree", "gbm", "C5.0", "glmboost")
 preProcessing <- c("center", "scale", "YeoJohnson", "nzv")
 oldinputCSV = "Testing.csv"
 newinputCSV = "Testing2.csv"
@@ -49,11 +48,11 @@ newinputCSV = "Testing2.csv"
 
 #~~ how many tunings per model? (mutliplicated by CV folds x repeats x number of parameters of the specific model)
 tune <- c(0)
-#tune[1] <- 25
-#tune[2] <- 5
-#tune[3] <- 10
-#tune[4] <- 5
-#tune[5] <- 10
+tune[1] <- 25
+tune[2] <- 5
+tune[3] <- 10
+tune[4] <- 5
+tune[5] <- 10
 print(cbind(methodUsed, tune))
 
 specs = c("0")
