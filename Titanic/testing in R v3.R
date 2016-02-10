@@ -9,7 +9,11 @@ library(stringr)
 library(plyr)
 library(dplyr)
 library(tidyr)
-library(doParallel) #do not parallelize because it creates major issues
+library(doParallel) #do not parallelize because it can creates major issues
+library(corrplot)
+library(factoextra)
+library(FactoMineR)
+library(gridBase)
 
 #~~~~ clean up
 
@@ -19,11 +23,12 @@ remove(list = ls())
 
 #~~~~ what methods?
 seedingValue = 11111 #ensures reproductability
-methodUsed <- c("rf", "rpart", "rpart2", "xgbTree", "gbm", "C5.0", "glmboost")
-targetUsed = "ROC" #Accuracy when N>>P, Balanced Accuracy when P>>N, Kappa when unbalanced classes
+#methodUsed <- c("cforest", "rf", "rpart", "rpart2", "xgbTree", "gbm", "C5.0", "glmboost")
+methodUsed <- c("cforest")
+targetUsed = "Accuracy" #Accuracy when N>>P, Balanced Accuracy when P>>N, Kappa when unbalanced classes
 preProcessing <- c("center", "scale", "YeoJohnson", "nzv")
-oldinputCSV = "Testing.csv"
-newinputCSV = "Testing2.csv"
+oldinputCSV = "Testing2.csv"
+newinputCSV = "Testing.csv"
 samplingMethod = "repeatedcv" #adaptive_cv is good and faster, repeatedcv is best (caretEnsemble) and reliable ($besttune error)
 
 #~~~~ preprocessing methods:
@@ -53,12 +58,7 @@ samplingMethod = "repeatedcv" #adaptive_cv is good and faster, repeatedcv is bes
 #~~ how many tunings per model? (mutliplicated by CV folds x repeats x number of parameters of the specific model)
 tune <- c(0)
 tune[1] <- 5
-tune[2] <- 50
-tune[3] <- 50
-tune[4] <- 5
-tune[5] <- 10
-tune[6] <- 25
-tune[7] <- 10
+#tune[1] <- 3; tune[2] <- 4; tune[3] <- 40; tune[4] <- 40; tune[5] <- 4; tune[6] <- 8; tune[7] <- 20; tune[8] <- 7
 print(cbind(methodUsed, tune))
 ensembleTune <- 10
 
@@ -76,7 +76,8 @@ for(i in 1:length(methodUsed)){
 #col = c(0) #deprecated, not working
 for(i in 1:length(methodUsed)){
   tempVarName1 = paste("col", i, sep = "")
-  assign(tempVarName1, c("Pclass", "Name", "Sex", "Age", "SibSp", "Parch", "Fare", "Cabin", "Embarked"))
+  assign(tempVarName1, c("Pclass", "Name", "SibSp", "Parch", "Sex", "Age", "Fare", "Cabin", "Embarked", "FamilySize", "FamilyName"))
+  #assign(tempVarName1, c("Pclass", "Name", "Sex", "Age", "Fare", "Cabin", "Embarked", "FamilySize", "FamilyName"))
 }
 
 #col1 <- c("Pclass", "Name", "Sex", "Age", "SibSp", "Parch", "Fare", "Cabin", "Embarked")
@@ -235,24 +236,6 @@ levels(train[, "Survived"]) <- c("No", "Yes")
 train[, "Cabin"] <- strtrim(train[, "Cabin"], 1)
 train[, "Cabin"] <- as.factor(train[, "Cabin"])
 
-#cleaning up names
-train$Name[!is.na(str_extract(train$Name, "Mr"))] <- "Mr"
-train$Name[!is.na(str_extract(train$Name, "Mrs"))] <- "Mrs"
-train$Name[!is.na(str_extract(train$Name, "Mme"))] <- "Mrs"
-train$Name[!is.na(str_extract(train$Name, "Miss"))] <- "Miss"
-train$Name[!is.na(str_extract(train$Name, "Ms"))] <- "Miss"
-train$Name[!is.na(str_extract(train$Name, "Mlle"))] <- "Miss"
-train$Name[!is.na(str_extract(train$Name, "Capt"))] <- "Mr"
-train$Name[!is.na(str_extract(train$Name, "Major"))] <- "Mr"
-train$Name[!is.na(str_extract(train$Name, "Col"))] <- "Mr"
-train$Name[!is.na(str_extract(train$Name, "Master"))] <- "Master"
-train$Name[!is.na(str_extract(train$Name, "Rev"))] <- "Mr"
-train$Name[!is.na(str_extract(train$Name, "Dr"))] <- "Mr"
-train$Name[!is.na(str_extract(train$Name, "Don"))] <- "Mr"
-train$Name[!is.na(str_extract(train$Name, "Countess"))] <- "Mrs"
-train$Name[!is.na(str_extract(train$Name, "Jonkheer"))] <- "Mr"
-train$Name <- factor(train$Name)
-
 #~~ test data
 
 #factorize
@@ -270,7 +253,61 @@ test = test[, !names(test) %in% c("PassengerId","Ticket")]
 test[, "Cabin"] <- strtrim(test[, "Cabin"], 1)
 test[, "Cabin"] <- as.factor(test[, "Cabin"])
 
+#getting rid of characters in factors
+train$Sex <- factor(train$Sex)
+test$Sex <- factor(test$Sex)
+train$Cabin <- factor(train$Cabin)
+test$Cabin <- factor(test$Cabin)
+train$Embarked <- factor(train$Embarked)
+test$Embarked <- factor(test$Embarked)
+train$Survived <- factor(train$Survived)
+
+#setting up family thingies
+fulldata <- join(train, test, type = "full")
+#fulldata[, "Name"] <- as.numeric(fulldata[, "Name"])
+#fulldata[, "Sex"] <- as.numeric(fulldata[, "Sex"])
+#fulldata[, "Cabin"] <- as.numeric(fulldata[, "Cabin"])
+#fulldata[, "Embarked"] <- as.numeric(fulldata[, "Embarked"])
+#fulldata[, "Survived"] <- as.numeric(fulldata[, "Survived"])
+fulldata[, "FamilyName"] <- sapply(fulldata$Name, FUN=function(x) {strsplit(x, split='[,.]')[[1]][1]})
+#train[train$FamilySize > 4, "FamilyName"] <- (fulldata$FamilyName[1:891])[train$FamilySize > 4]
+#test[test$FamilySize > 4, "FamilyName"] <- (fulldata$FamilyName[892:1309])[test$FamilySize > 4]
+train[train$FamilySize > 4, "FamilyName"] <- "Large"
+test[test$FamilySize > 4, "FamilyName"] <- "Large"
+train[train$FamilySize < 5, "FamilyName"] <- "Unknown"
+test[test$FamilySize < 5, "FamilyName"] <- "Unknown"
+train[train$FamilyName %in% c("Backstrom", "Hansen", "Kink", "Kink-Heilmann", "Renouf"), "FamilyName"] <- "Unknown"
+test[test$FamilyName %in% c("Backstrom", "Hansen", "Kink", "Kink-Heilmann", "Renouf"), "FamilyName"] <- "Unknown"
+#86 (Backstrom), #861 (Hansen), #70/1268 (Kink), #1286 (Kink-Heilman), #727 (Renouf) are supposedly false positives (< 3 occ.)
+#train[, "FamilyName"] <- fulldata[1:891, "FamilyName"]
+#test[, "FamilyName"] <- fulldata[892:1309, "FamilyName"]
+train$FamilyName <- as.factor(train$FamilyName)
+test$FamilyName <- as.factor(test$FamilyName)
+fulldata$FamilyName <- as.factor(fulldata$FamilyName)
+
+#cleaning up useless variables
+#train <- train[, !names(train) %in% c("SibSp", "Parch")]
+#test <- test[, !names(test) %in% c("SibSp", "Parch")]
+#fulldata <- fulldata[, !names(fulldata) %in% c("SibSp", "Parch")]
+
 #cleaning up names
+train$Name[!is.na(str_extract(train$Name, "Mr"))] <- "Mr"
+train$Name[!is.na(str_extract(train$Name, "Mrs"))] <- "Mrs"
+train$Name[!is.na(str_extract(train$Name, "Mme"))] <- "Mrs"
+train$Name[!is.na(str_extract(train$Name, "Miss"))] <- "Miss"
+train$Name[!is.na(str_extract(train$Name, "Ms"))] <- "Miss"
+train$Name[!is.na(str_extract(train$Name, "Mlle"))] <- "Miss"
+train$Name[!is.na(str_extract(train$Name, "Capt"))] <- "Mr"
+train$Name[!is.na(str_extract(train$Name, "Major"))] <- "Mr"
+train$Name[!is.na(str_extract(train$Name, "Col"))] <- "Mr"
+train$Name[!is.na(str_extract(train$Name, "Master"))] <- "Master"
+train$Name[!is.na(str_extract(train$Name, "Rev"))] <- "Mr"
+train$Name[!is.na(str_extract(train$Name, "Dr"))] <- "Mr"
+train$Name[!is.na(str_extract(train$Name, "Don"))] <- "Mr"
+train$Name[!is.na(str_extract(train$Name, "Countess"))] <- "Mrs"
+train$Name[!is.na(str_extract(train$Name, "Jonkheer"))] <- "Mr"
+train$Name <- factor(train$Name)
+fulldata$Name[1:891] <- levels(train$Name)[train$Name]
 
 test$Name[!is.na(str_extract(test$Name, "Mr"))] <- "Mr"
 test$Name[!is.na(str_extract(test$Name, "Mrs"))] <- "Mrs"
@@ -288,28 +325,39 @@ test$Name[!is.na(str_extract(test$Name, "Don"))] <- "Mr"
 test$Name[!is.na(str_extract(test$Name, "Countess"))] <- "Mrs"
 test$Name[!is.na(str_extract(test$Name, "Jonkheer"))] <- "Mr"
 test$Name <- factor(test$Name)
+fulldata$Name[892:1309] <- levels(test$Name)[test$Name]
+
+train$Name <- as.factor(train$Name)
+train$FamilyName <- as.factor(train$FamilyName)
+test$Name <- as.factor(test$Name)
+test$FamilyName <- as.factor(test$FamilyName)
+fulldata$Name <- as.factor(fulldata$Name)
 
 
 #~~ fixing missing data
-train$Pclass <- as.numeric(levels(train$Pclass)[train$Pclass])
-train$SibSp <- as.numeric(levels(train$SibSp)[train$SibSp])
-test$Pclass <- as.numeric(levels(test$Pclass)[test$Pclass])
-test$SibSp <- as.numeric(levels(test$SibSp)[test$SibSp])
-fulldata <- join(test, train, type = "full")
-fulldata[, "Name"] <- as.numeric(fulldata[, "Name"])
-fulldata[, "Sex"] <- as.numeric(fulldata[, "Sex"])
-fulldata[, "Cabin"] <- as.numeric(fulldata[, "Cabin"])
-fulldata[, "Embarked"] <- as.numeric(fulldata[, "Embarked"])
-fulldata[, "Survived"] <- as.numeric(fulldata[, "Survived"])
-NAdata <- amelia(x = fulldata, m = 1)
-train$Age[is.na(train$Age)] <- NAdata$imputations$imp1$Age[is.na(train$Age)]
-test$Age[is.na(test$Age)] <- NAdata$imputations$imp1$Age[is.na(test$Age)]
+#train$Pclass <- as.numeric(levels(train$Pclass)[train$Pclass])
+#train$SibSp <- as.numeric(levels(train$SibSp)[train$SibSp])
+#test$Pclass <- as.numeric(levels(test$Pclass)[test$Pclass])
+#test$SibSp <- as.numeric(levels(test$SibSp)[test$SibSp])
+fulldata$Age <- fulldata$Age / 2
+fulldata$Age <- as.integer(fulldata$Age * 2)
+fulldata$Name <- as.integer(fulldata$Name)
+fulldata$Sex <- as.integer(fulldata$Sex)
+fulldata$Cabin <- as.integer(fulldata$Cabin)
+fulldata$FamilyName <- as.integer(fulldata$FamilyName)
+fulldata$Embarked <- as.numeric(fulldata$Embarked)
+NAdata <- amelia(x = fulldata, m = 1, noms = c("Embarked"), idvars = c("FamilyName", "Sex", "Survived", "FamilySize"))
+train$Age[is.na(train$Age)] <- NAdata$imputations$imp1$Age[is.na(train$Age)] / 2
+test$Age[is.na(test$Age)] <- NAdata$imputations$imp1$Age[is.na(test$Age)] / 2
 test$Fare[is.na(test$Fare)] <- NAdata$imputations$imp1$Fare[is.na(test$Fare)]
+train$Embarked[c(62,830)] <- levels(train$Embarked)[NAdata$imputations$imp1$Embarked[c(62,830)]]
+train$Embarked <- factor(train$Embarked)
 levels(train$Cabin)[1] <- "None"
 levels(test$Cabin)[1] <- "None"
 #missmap(fulldata)
 #missmap(train)
 #missmap(test)
+
 
 #~~ GLM model to determine missing age/fare using all data - deprecated method
 #fulldata <- join(test, train, type = "full")
@@ -319,15 +367,15 @@ levels(test$Cabin)[1] <- "None"
 #test$Age[is.na(test$Age)] <- predict(age.pre, test)[is.na(test$Age)]
 #test$Fare[is.na(test$Fare)] <- predict(fare.pre, test)[is.na(test$Fare)]
 
-#~~ supposed embarked for the two people with missing data
-train$Embarked[train$Embarked == ""] <- "S"
-train$Embarked <- factor(train$Embarked)
+#~~ supposed embarked for the two people with missing data (62,830) - DEPRECATED
+#train$Embarked[train$Embarked == ""] <- "S"
+#train$Embarked <- factor(train$Embarked)
 
 #~~ scaling reals | OLD METHOD, DEPRECATED
-train$Parch <- as.numeric(as.character(train$Parch))
+#train$Parch <- as.numeric(as.character(train$Parch))
 #procValues <- preProcess(train[, c("Age", "Fare")], method = c("center", "scale"))
 #train <- predict(procValues, train)
-test$Parch <- as.numeric(as.character(test$Parch))
+#test$Parch <- as.numeric(as.character(test$Parch))
 #test <- predict(procValues, test)
 
 #~~ scaling reals | NEW METHOD, "BETTER"
@@ -387,19 +435,55 @@ for(i in 1:length(methodUsed)){
     ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, verboseIter = TRUE, returnResamp = "all", savePredictions = "all", classProbs = TRUE, summaryFunction = twoClassSummary, index = indexPreds)
   }
   set.seed(seedingValue) #ensures reproductability
-  assign(tempVarName1, train(Survived ~ ., data = train_temp, method = methodUsed[i], metric = "ROC", trControl = ctrl, tuneLength = tune[i]))
+  assign(tempVarName1, train(Survived ~ ., data = train_temp, method = methodUsed[i], metric = targetUsed, trControl = ctrl, tuneLength = tune[i]))
   stopCluster(cl)
   registerDoSEQ()
   closeAllConnections()
 }
 
+#adjust best for optimization
+for(i in 1:length(methodUsed)){
+  print(paste("Adjusting ", methodUsed[i], "(", i, ")", sep = ""))
+  tempVarName1 <- paste("model_list", i, sep = "")
+  tempVarName2 <- paste("col", i, sep = "")
+  tempVarName3 <- "bin"
+  train_temp <- train[, c("Survived", get(tempVarName2))]
+  if (!is.na(get(tempVarName3)[i])[1]){
+    for(Vars in get(tempVarName3)[i]){
+      train_temp[, Vars] <- as.numeric(train_temp[, Vars])
+      train_temp[, Vars] <- train_temp[, Vars] - min(train_temp[, Vars]) + 1
+    }
+  }
+  tempVarName <- as.data.frame(get(tempVarName1)$results[best(get(tempVarName1)$results, metric = "ROC", maximize = TRUE),1:ncol(get(tempVarName1)$bestTune)])
+  if (ncol(tempVarName) == 1){
+    colnames(tempVarName) <- names(get(tempVarName1)$bestTune)
+  }
+  print(get(tempVarName1))
+  print("Best was:")
+  print(tempVarName)
+  tempVarName1 <- paste("model_list_opt", i, sep = "")
+  cl <- makeCluster(2)
+  registerDoParallel()
+  ctrl <- trainControl(method = "repeatedcv", repeats = CVrepeats, number = CVfolds, verboseIter = TRUE, returnResamp = "all", savePredictions = "all", classProbs = TRUE, summaryFunction = twoClassSummary, index = indexPreds)
+  set.seed(seedingValue) #ensures reproductability
+  assign(tempVarName1, train(Survived ~ ., data = train_temp, method = methodUsed[i], metric = targetUsed, trControl = ctrl, tuneGrid = tempVarName))
+  stopCluster(cl)
+  registerDoSEQ()
+  closeAllConnections()
+}
+
+#for(i in 1:length(methodUsed)){
+#  tempVarName <- paste("confMatrix", i, sep = "")
+#  get(tempVarName)
+#}
+
 #confusion matrix
 for(i in 1:length(methodUsed)){
   print(paste("Doing ", methodUsed[i], "(", i, ")", sep = ""))
-  tempVarName <- paste("model_list", i, sep = "")
+  tempVarName <- paste("model_list_opt", i, sep = "")
   tempVarName2 <- paste("col", i, sep = "")
   tempVarName3 <- "bin"
-  test_temp <- test[, c("Survived", get(tempVarName2))]
+  test_temp <- train[, c("Survived", get(tempVarName2))]
   if (!is.na(get(tempVarName3)[i])[1]){
     for(Vars in get(tempVarName3)[i]){
       test_temp[, Vars] <- as.numeric(test_temp[, Vars])
@@ -408,7 +492,7 @@ for(i in 1:length(methodUsed)){
   }
   Pred <- predict.train(get(tempVarName), test_temp)
   tempVarName <- paste("confMatrix", i, sep = "")
-  assign(tempVarName, confusionMatrix(Pred, test$Survived))
+  assign(tempVarName, confusionMatrix(table(factor(Pred, union(Pred, test_temp$Survived)), factor(test_temp$Survived, union(Pred, test_temp$Survived)))))
 }
 #for(i in 1:length(methodUsed)){
 #  tempVarName <- paste("confMatrix", i, sep = "")
@@ -439,8 +523,8 @@ print(confMatrices, digits = 4)
 #confusionMatrix(Pred, test$Survived)
 
 #real prediction but on all data set
-i <- which(confMatrices == max(confMatrices[targetUsed,]), arr.ind = TRUE)[1,2]
-print(paste("Best method found is: ", methodUsed[i], ", with ", targetUsed, " = ", round(max(confMatrices["Accuracy",]), 4), sep = ""))
+i <- which(confMatrices == max(confMatrices["Accuracy",]), arr.ind = TRUE)[1,2]
+print(paste("Best method found is: ", methodUsed[i], ", with Accuracy = ", round(max(confMatrices["Accuracy",]), 4), sep = ""))
 tempVarName2 <- paste("col", i, sep = "")
 tempVarName3 <- "bin"
 train_temp <- train2[, c("Survived", get(tempVarName2))]
@@ -456,16 +540,17 @@ if (!is.na(get(tempVarName3)[i])[1]){
 #cl <- makeCluster(2)
 #registerDoParallel()
 #model_list <- train(Survived ~ ., data = train_temp, method = methodUsed[i], trControl = ctrl) #deprecated method
-tempVarName <- paste("model_list", i, sep = "")
+tempVarName <- paste("model_list_opt", i, sep = "")
 model_list <- get(tempVarName)
 #stopCluster(cl)
 predictedValues <- predict.train(model_list, test_temp, type = "raw")
 gendermodel <- read.table("gendermodel.csv", sep = ",", header = TRUE)
+gendermodel$Survived <- as.numeric(predictedValues) - 1
 #gendermodel$Survived[predictedValues == "No"] <- 0
 #gendermodel$Survived[predictedValues == "Yes"] <- 1
 oldgendermodel <- read.table(oldinputCSV, sep = ",", header = TRUE)
 print("Difference of predictions: Not different")
-print(count(oldgendermodel$Survived == gendermodel$Survived))
+print(table(oldgendermodel$Survived == gendermodel$Survived))
 write.csv(gendermodel, file = newinputCSV, row.names = FALSE)
 
 
@@ -503,19 +588,19 @@ closeAllConnections()
 
 #~~~~~~~~~~ if you have models SEPARATED (due to using the code to create models separately), do this ~~~~~~~~~~~~
 
-tempVarName = paste("list(", methodUsed[1], " = model_list1", sep = "")
+tempVarName = paste("list(", methodUsed[1], " = model_list_opt1", sep = "")
 for(i in 2:length(methodUsed)){
-  tempVarName = paste(tempVarName, ", ", methodUsed[i], " = model_list", i , sep = "")
+  tempVarName = paste(tempVarName, ", ", methodUsed[i], " = model_list_opt", i , sep = "")
 }
 tempVarName = paste(tempVarName, ")", sep = "")
 multimodel <- eval(parse(text = tempVarName))
 #multimodel <- list(rpart2 = model_list1, xgbTree = model_list2, gbm = model_list3, C5.0 = model_list4, glmboost = model_list5)
 class(multimodel) <- "caretList"
 
-if(randomness[i] == 1) {
-  ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, verboseIter = TRUE, returnResamp = "all", savePredictions = "all", classProbs = TRUE, summaryFunction = twoClassSummary, index = indexPreds, search = "random")
+if(sum(randomness) > 0) {
+  ctrl <- trainControl(method = "repeatedcv", repeats = CVrepeats, number = CVfolds, verboseIter = TRUE, returnResamp = "all", savePredictions = "all", classProbs = TRUE, index = indexPreds, search = "random")
 } else {
-  ctrl <- trainControl(method = samplingMethod, repeats = CVrepeats, number = CVfolds, verboseIter = TRUE, returnResamp = "all", savePredictions = "all", classProbs = TRUE, summaryFunction = twoClassSummary, index = indexPreds)
+  ctrl <- trainControl(method = "repeatedcv", repeats = CVrepeats, number = CVfolds, verboseIter = TRUE, returnResamp = "all", savePredictions = "all", classProbs = TRUE, index = indexPreds)
 }
 
 #~~~~~~~~~~ END SEPARATION ~~~~~~~~~~
@@ -523,7 +608,34 @@ if(randomness[i] == 1) {
 #~~ make ensemble ~~ CHOOSE ###
 
 #cannot use tuneLength
-multiensemble <- caretStack(multimodel, method = "glm", metric = targetUsed, trControl = ctrl) #do not use caretEnsemble because it bugs the Summary
+model_corr <- modelCor(resamples(multimodel))
+model_pca <- PCA(model_corr, graph = FALSE)
+plot.new()
+model_plots_vp1 <- viewport(layout.pos.col = 1, layout.pos.row = 1)
+model_plots_vp2 <- viewport(layout.pos.col = 2, layout.pos.row = 1)
+model_plots_vp3 <- viewport(layout.pos.col = 1, layout.pos.row = 2)
+model_plots_vp4 <- viewport(layout.pos.col = 2, layout.pos.row = 2)
+pushViewport(viewport(layout = grid.layout(nrow = 2, ncol = 2)))
+pushViewport(model_plots_vp1)
+par(new = TRUE, fig = gridFIG())
+corrplot(model_corr, method = "pie", type = "lower", cl.lim = c(0,1), order = "hclust", tl.col = "black", tl.srt = 45, addCoef.col = "white", bg = "grey95", col = colorRampPalette(c("black", "black", "black", "black", "black", "grey50", "green", "khaki2", "red"))(50))
+popViewport()
+model_plots <- NULL
+model_plots$pca1 <- fviz_contrib(model_pca, choice = "var", axes = 1:2) + theme_linedraw()
+model_plots$pca2 <- fviz_pca_var(model_pca, col.var="cos2") + scale_color_gradient2(low="white", mid="blue", high="red", limits = c(0,1)) + theme_minimal()
+model_plots$pca3 <- fviz_pca_var(model_pca, col.var="contrib") + scale_color_gradientn(colors = colorRampPalette(c("grey50", "green", "darkgoldenrod", "red"))(50), limits = c(0,100)) + theme_minimal()
+pushViewport(model_plots_vp2)
+print(model_plots$pca1, newpage = FALSE)
+popViewport()
+pushViewport(model_plots_vp3)
+print(model_plots$pca2, newpage = FALSE)
+popViewport()
+pushViewport(model_plots_vp4)
+print(model_plots$pca3, newpage = FALSE)
+popViewport(1)
+#grid.arrange(model_plots$pca1, model_plots$pca2, model_plots$pca3, nrow = 2, layout_matrix = cbind(c(1,2),c(1,3)))
+
+multiensemble <- caretStack(multimodel, method = "lm", metric = "Accuracy", trControl = ctrl) #do not use caretEnsemble because it bugs the Summary, GLM bugs a lot due to fixed effects
 summary(multiensemble) #summary beforehand
 class(multiensemble) <- "caretEnsemble" #return to caretEnsemble
 summary(multiensemble) #summary afterhand
@@ -540,13 +652,15 @@ summary(multiensemble)
 #do not pass type value, it does automatically depending on the tree shown higher (depends on ctrlmulti)
 predictedValues <- predict(multiensemble, newdata = test)
 gendermodel <- read.table("gendermodel.csv", sep = ",", header = TRUE)
-
+gendermodel$Survived <- as.numeric(predictedValues) - 1
 #gendermodel$Survived[predictedValues < 0.50] <- 0
 #gendermodel$Survived[predictedValues >= 0.50] <- 1
 oldgendermodel <- read.table(oldinputCSV, sep = ",", header = TRUE)
 print("Difference of predictions: Not different")
-print(count(oldgendermodel$Survived == gendermodel$Survived))
+print(table(oldgendermodel$Survived == gendermodel$Survived))
 write.csv(gendermodel, file = newinputCSV, row.names = FALSE)
+
+
 
 
 
