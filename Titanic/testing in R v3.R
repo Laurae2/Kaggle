@@ -24,12 +24,12 @@ remove(list = ls())
 #~~~~ what methods?
 seedingValue = 11111 #ensures reproductability
 #methodUsed <- c("cforest", "rf", "rpart", "rpart2", "xgbTree", "gbm", "C5.0", "glmboost")
-methodUsed <- c("cforest")
+methodUsed <- c("cforest", "xgbTree")
 targetUsed = "Accuracy" #Accuracy when N>>P, Balanced Accuracy when P>>N, Kappa when unbalanced classes
 preProcessing <- c("center", "scale", "YeoJohnson", "nzv")
 oldinputCSV = "Testing2.csv"
 newinputCSV = "Testing.csv"
-samplingMethod = "repeatedcv" #adaptive_cv is good and faster, repeatedcv is best (caretEnsemble) and reliable ($besttune error)
+samplingMethod = "adaptive_cv" #adaptive_cv is good and faster, repeatedcv is best (caretEnsemble) and reliable ($besttune error)
 
 #~~~~ preprocessing methods:
 #center = mean reduction (any value)
@@ -57,7 +57,8 @@ samplingMethod = "repeatedcv" #adaptive_cv is good and faster, repeatedcv is bes
 
 #~~ how many tunings per model? (mutliplicated by CV folds x repeats x number of parameters of the specific model)
 tune <- c(0)
-tune[1] <- 5
+tune[1] <- 10
+tune[2] <- 10
 #tune[1] <- 3; tune[2] <- 4; tune[3] <- 40; tune[4] <- 40; tune[5] <- 4; tune[6] <- 8; tune[7] <- 20; tune[8] <- 7
 print(cbind(methodUsed, tune))
 ensembleTune <- 10
@@ -76,7 +77,8 @@ for(i in 1:length(methodUsed)){
 #col = c(0) #deprecated, not working
 for(i in 1:length(methodUsed)){
   tempVarName1 = paste("col", i, sep = "")
-  assign(tempVarName1, c("Pclass", "Name", "SibSp", "Parch", "Sex", "Age", "Fare", "Cabin", "Embarked", "FamilySize", "FamilyName"))
+  assign(tempVarName1, c("Pclass", "Name", "Sex", "Age", "Fare", "FamilySize", "FamilyName"))
+  #assign(tempVarName1, c("Pclass", "Name", "SibSp", "Parch", "Sex", "Age", "Fare", "Cabin", "Embarked", "FamilySize", "FamilyName"))
   #assign(tempVarName1, c("Pclass", "Name", "Sex", "Age", "Fare", "Cabin", "Embarked", "FamilySize", "FamilyName"))
 }
 
@@ -99,7 +101,7 @@ for(i in 1:length(methodUsed)){
 #bin5 <- NA
 
 #~~~~~ how many times to run Cross Validation?
-CVrepeats = 5
+CVrepeats = 3
 CVfolds = 5
 
 #modelLookup()[modelLookup()[,"probModel"] == TRUE,][, c("model","label")]
@@ -549,6 +551,7 @@ gendermodel$Survived <- as.numeric(predictedValues) - 1
 #gendermodel$Survived[predictedValues == "No"] <- 0
 #gendermodel$Survived[predictedValues == "Yes"] <- 1
 oldgendermodel <- read.table(oldinputCSV, sep = ",", header = TRUE)
+#oldgendermodel <- read.table(newinputCSV, sep = ",", header = TRUE)
 print("Difference of predictions: Not different")
 print(table(oldgendermodel$Survived == gendermodel$Survived))
 write.csv(gendermodel, file = newinputCSV, row.names = FALSE)
@@ -635,7 +638,7 @@ print(model_plots$pca3, newpage = FALSE)
 popViewport(1)
 #grid.arrange(model_plots$pca1, model_plots$pca2, model_plots$pca3, nrow = 2, layout_matrix = cbind(c(1,2),c(1,3)))
 
-multiensemble <- caretStack(multimodel, method = "lm", metric = "Accuracy", trControl = ctrl) #do not use caretEnsemble because it bugs the Summary, GLM bugs a lot due to fixed effects
+multiensemble <- caretStack(multimodel, method = "glm", metric = "Accuracy", trControl = ctrl) #do not use caretEnsemble because it bugs the Summary, GLM bugs a lot due to fixed effects
 summary(multiensemble) #summary beforehand
 class(multiensemble) <- "caretEnsemble" #return to caretEnsemble
 summary(multiensemble) #summary afterhand
@@ -656,6 +659,7 @@ gendermodel$Survived <- as.numeric(predictedValues) - 1
 #gendermodel$Survived[predictedValues < 0.50] <- 0
 #gendermodel$Survived[predictedValues >= 0.50] <- 1
 oldgendermodel <- read.table(oldinputCSV, sep = ",", header = TRUE)
+#oldgendermodel <- read.table(newinputCSV, sep = ",", header = TRUE)
 print("Difference of predictions: Not different")
 print(table(oldgendermodel$Survived == gendermodel$Survived))
 write.csv(gendermodel, file = newinputCSV, row.names = FALSE)
@@ -720,7 +724,7 @@ plot(saProfile)
 
 
 #~ plot a model depending on a tuning method
-i <- 4
+i <- 2
 tempVarName <- paste("model_list", i, sep = "")
 plot(get(tempVarName))
 histogram(get(tempVarName))
