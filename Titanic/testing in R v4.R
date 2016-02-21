@@ -3,6 +3,7 @@
 #~~~~ load packages
 
 library(SuperLearner)
+library(subsemble)
 library(caret)
 library(caretEnsemble)
 library(Amelia)
@@ -159,6 +160,7 @@ fulldata$Sex <- as.integer(fulldata$Sex)
 fulldata$Cabin <- as.integer(fulldata$Cabin)
 fulldata$FamilyName <- as.integer(fulldata$FamilyName)
 fulldata$Embarked <- as.numeric(fulldata$Embarked)
+fulldata$Embarked[c(62,830)] <- NA
 NAdata <- amelia(x = fulldata, m = 1, noms = c("Embarked"), idvars = c("FamilyName", "Sex", "Survived", "FamilySize"))
 train$Age[is.na(train$Age)] <- NAdata$imputations$imp1$Age[is.na(train$Age)] / 2
 test$Age[is.na(test$Age)] <- NAdata$imputations$imp1$Age[is.na(test$Age)] / 2
@@ -171,11 +173,19 @@ levels(test$Cabin)[1] <- "None"
 #missmap(train)
 #missmap(test)
 
-
 #~~ scaling reals | NEW METHOD, "BETTER"
 procValues <- preProcess(fulldata[, c("Age", "Fare")], method = c("center", "scale", "YeoJohnson", "nzv"), verbose = TRUE)
 train <- predict(procValues, train)
 test <- predict(procValues, test)
+
+#~~ get rid of factor issues (non-existing or not useful)
+train[sapply(train, is.factor)] <- lapply(train[sapply(train, is.factor)], as.character)
+test[sapply(test, is.factor)] <- lapply(test[sapply(test, is.factor)], as.character)
+fulldata <- rbind(train, data.frame(Survived = rep(NA, nrow(test)), test))
+fulldata[sapply(fulldata, is.character)] <- lapply(fulldata[sapply(fulldata, is.character)], as.factor)
+fulldata[sapply(fulldata, is.factor)] <- lapply(fulldata[sapply(fulldata, is.factor)], as.integer)
+train <- fulldata[c(1:891),]
+test <- fulldata[c(892:1309), -1]
 
 #~~~~ exporting cleaning CSVs
 #write.csv(train, "train_clean.csv", row.names = FALSE)
@@ -184,4 +194,104 @@ train2 <- train
 test2 <- test
 
 
-#prediction
+#~~~~~~~~~~ PREDICTIONS
+
+#creating random forest models
+tuneGrid <- expand.grid(mtry = c(500, 1000), nodesize = c(1, 3, 5))
+for (mm in seq(nrow(tuneGrid))) {
+  eval(parse(text = paste("SL.randomForest.", mm,
+                   " <- function(..., mtry = ", tuneGrid[mm, 1],
+                   ", nodesize = ", tuneGrid[mm, 2], ") {
+                   SL.randomForest(..., mtry = mtry,
+                   nodesize = nodesize) } ", sep = "")))
+}
+
+create.SL.knn <- function(kn) {for (mm in kn) {
+  eval(parse(text = paste("SL.knn.", mm, " <<- function(..., k = ", mm, ") SL.knn(..., k = k)", sep = "")))
+}}
+
+#create.SL.knn(kn = c(20, 30, 40, 50))
+
+create.SL.glmnet <- function(alphan) {for (mm in alphan) {
+  eval(parse(text = paste("SL.glmnet.", mm, " <<- function(..., alpha = ", mm, ") SL.glmnet(..., alpha = alpha)", sep = "")))
+}}
+
+create.SL.glmnet(alphan = c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9))
+
+SL.library <- c(paste("SL.glmnet.", c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9), sep = ""),
+                paste("SL.randomForest.", seq(nrow(tuneGrid)), sep = ""))
+
+Y = as.numeric(train$Survived) - 1 #avoid using subset because we need a value and not a data frame, must be binary (0 or 1) ONLY
+X = subset(train, select = -Survived)
+
+
+#~~ Crossvalidated SuperLearner meta model of crossvalideted models
+
+cl <- makeCluster(2)
+registerDoParallel()
+fitSL.CV <- CV.SuperLearner(Y = Y, X = X,
+                            SL.library = SL.library,
+                            family = binomial(),
+                            V = 5,
+                            method = "method.AUC",
+                            control = list(saveFitLibrary = TRUE),
+                            cvControl = list(V = 5, stratifyCV = TRUE),
+                            verbose = TRUE,
+                            saveAll = TRUE,
+                            ) #parallel = "multicore" / cl, not working
+stopCluster(cl)
+registerDoSEQ()
+closeAllConnections()
+summary(fitSL.CV)
+plot.CV.SuperLearner(fitSL.CV)
+predictedValues <- predict.SuperLearner(fitSL.CV, newdata = test, X = X, Y = Y)
+
+
+#~~ SuperLearner meta model of crossvalidated models
+
+cl <- makeCluster(2)
+registerDoParallel()
+fitSL <- SuperLearner(Y = Y, X = X,
+                      SL.library = SL.library,
+                      family = binomial(),
+                      method = "method.AUC",
+                      control = list(saveFitLibrary = TRUE),
+                      cvControl = list(V = 5, stratifyCV = TRUE),
+                      verbose = TRUE)
+stopCluster(cl)
+registerDoSEQ()
+closeAllConnections()
+fitSL
+predictedValues <- predict.SuperLearner(fitSL, newdata = test, X = X, Y = Y)
+
+
+#~~ Crossvalidated SuperLearner meta model of crossvalidated models using Subsemple - not a good idea
+
+cl <- makeCluster(2)
+registerDoParallel()
+fitSL <- subsemble(x = X, y = Y,
+                   family = binomial(),
+                   learner = SL.library,
+                   metalearner = "SL.glm",
+                   subsets = 1,
+                   cvControl = list(V = 5, stratifyCV = TRUE))  #learnControl = list(multiType = "divisor") = for fast if subsets > 1, requires length(learner) dividing number of subsets
+stopCluster(cl)
+registerDoSEQ()
+closeAllConnections()
+auc <- AUC(predictions = fitSL$pred, labels = Y)
+print(AUC)
+predictedValues <- predict(fitSL, newx = test)
+
+
+
+#~~ output data to CSV
+
+gendermodel <- read.table("gendermodel.csv", sep = ",", header = TRUE)
+gendermodel$Survived <- as.numeric(predictedValues$pred)
+gendermodel$Survived[predictedValues$pred < 0.5] <- 0
+gendermodel$Survived[predictedValues$pred >= 0.5] <- 1
+oldgendermodel <- read.table(oldinputCSV, sep = ",", header = TRUE)
+#oldgendermodel <- read.table(newinputCSV, sep = ",", header = TRUE)
+print("Difference of predictions: Not different")
+print(table(oldgendermodel$Survived == gendermodel$Survived))
+write.csv(gendermodel, file = newinputCSV, row.names = FALSE)
