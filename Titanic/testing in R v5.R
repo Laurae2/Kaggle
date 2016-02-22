@@ -3,7 +3,6 @@
 #~~~~ load packages
 
 library(SuperLearner)
-library(subsemble)
 library(caret)
 library(caretEnsemble)
 library(Amelia)
@@ -20,8 +19,8 @@ remove(list = ls())
 #~~~~~~~~~~~~~~ USER INPUT ~~~~~~~~~~~~~~
 
 #~~~~ what methods?
-oldinputCSV = "Testing.csv"
-newinputCSV = "Testing2.csv"
+oldinputCSV = "Testing2.csv"
+newinputCSV = "Testing.csv"
 
 #for binary input, use this when using probabilities:
 #test$Survived[test$Survived >= 0.5] <- 1
@@ -196,58 +195,74 @@ test2 <- test
 
 #~~~~~~~~~~ PREDICTIONS
 
-#creating random forest models
-tuneGrid <- expand.grid(mtry = c(500, 1000), nodesize = c(1, 3, 5))
-for (mm in seq(nrow(tuneGrid))) {
-  eval(parse(text = paste("SL.randomForest.", mm,
-                   " <- function(..., mtry = ", tuneGrid[mm, 1],
-                   ", nodesize = ", tuneGrid[mm, 2], ") {
-                   SL.randomForest(..., mtry = mtry,
-                   nodesize = nodesize) } ", sep = "")))
+#generalized linear model (glm)
+#linear discriminant analysis (lda)
+#regularized regression (glmnet)
+#k-nearest neighbors (knn)
+#naive bayes (nb)
+#CART (rpart)
+
+#~wrapper to create caret models for SuperLearner
+
+SL.caret2 <- function(Y, X, newX, family, obsWeights, method = "rf", trControl = caret::trainControl(method = "cv", number = 5, classProbs = TRUE), metric = ifelse(family$family == 'gaussian', 'RMSE', 'Accuracy'), ...) {
+  if (family$family == "gaussian") {
+    fit.train <- caret::train(x = X, y = Y, weights = obsWeights, metric = metric, method = method, tuneLength = tuneLength, trControl = trControl)
+    pred <- predict(fit.train, newdata = newX, type = "raw")
+  }
+  if (family$family == "binomial") {
+    # outcome must be factor, and have real labels
+    Y.f <- as.factor(Y)
+    levels(Y.f) <- c("A0", "A1")
+    fit.train <- caret::train(x = X, y = Y.f, weights = obsWeights, metric = metric, method = method, trControl = trControl)
+    pred <- predict(fit.train, newdata = newX, type = "prob")[, 2]
+  }
+  fit <- list(object = fit.train)
+  out <- list(pred = pred, fit = fit)
+  class(out$fit) <- c("SL.caret")
+  return(out)
 }
 
-create.SL.knn <- function(kn) {for (mm in kn) {
-  eval(parse(text = paste("SL.knn.", mm, " <<- function(..., k = ", mm, ") SL.knn(..., k = k)", sep = "")))
+SL.caret2t <- function(Y, X, newX, family, obsWeights, method = "rf", tuneGrid = data.frame(Nothing = c(NA)), trControl = caret::trainControl(method = "cv", number = 5, classProbs = TRUE), metric = ifelse(family$family == 'gaussian', 'RMSE', 'Accuracy'), ...) {
+  if (family$family == "gaussian") {
+    fit.train <- caret::train(x = X, y = Y, weights = obsWeights, metric = metric, method = method, trControl = trControl, tuneGrid = tuneGrid)
+    pred <- predict(fit.train, newdata = newX, type = "raw")
+  }
+  if (family$family == "binomial") {
+    # outcome must be factor, and have real labels
+    Y.f <- as.factor(Y)
+    levels(Y.f) <- c("A0", "A1")
+    fit.train <- caret::train(x = X, y = Y.f, weights = obsWeights, metric = metric, method = method, trControl = trControl, tuneGrid = tuneGrid)
+    pred <- predict(fit.train, newdata = newX, type = "prob")[, 2]
+  }
+  fit <- list(object = fit.train)
+  out <- list(pred = pred, fit = fit)
+  class(out$fit) <- c("SL.caret")
+  return(out)
+}
+
+
+#modelList = c("glm", "lda", "glmnet", "knn", "nb", "rpart")
+#modelList = c("cforest", "rpart", "rpart2", "rpart1SE", "xgbTree", "C5.0", "ctree", "ctree2", "blackboost")
+#modelList = c("cforest", "parRF", "rf", "extraTrees", "Boruta", "RRF", "wsrf") #random forests
+modelList = c("cforest", "rf", "wsrf", "Boruta") #best forest models
+#modelList = c("AdaBoost.M1", "AdaBag", "treebag", "LogitBoost", "blackboost", "C5.0", "rpart", "ctree", "gbm", "evtree", "nodeHarvest") #tree based models
+create_caret_model <- function(kn) {for (mm in kn) {
+  eval(parse(text = paste("model.", mm, " <<- function(..., method = '", mm, "') SL.caret2(..., method = method, metric = 'ROC')", sep = "")))
 }}
+create_caret_model(kn = modelList)
+#model.cforest4 <- function(..., method = "cforest") SL.caret2t(..., method = method, tuneGrid = data.frame(mtry = 4))
+#model.cforest5 <- function(..., method = "cforest") SL.caret2t(..., method = method, tuneGrid = data.frame(mtry = 5))
+#model.cforest6 <- function(..., method = "cforest") SL.caret2t(..., method = method, tuneGrid = data.frame(mtry = 6))
+#model.cforest7 <- function(..., method = "cforest") SL.caret2t(..., method = method, tuneGrid = data.frame(mtry = 7))
+#model.cforest8 <- function(..., method = "cforest") SL.caret2t(..., method = method, tuneGrid = data.frame(mtry = 8))
+#model.cforest9 <- function(..., method = "cforest") SL.caret2t(..., method = method, tuneGrid = data.frame(mtry = 9))
+#model.cforest10 <- function(..., method = "cforest") SL.caret2t(..., method = method, tuneGrid = data.frame(mtry = 10))
+#model.cforest11 <- function(..., method = "cforest") SL.caret2t(..., method = method, tuneGrid = data.frame(mtry = 11))
 
-#create.SL.knn(kn = c(20, 30, 40, 50))
+SL.library <- c(paste("model.", modelList, sep = ""))
 
-create.SL.glmnet <- function(alphan) {for (mm in alphan) {
-  eval(parse(text = paste("SL.glmnet.", mm, " <<- function(..., alpha = ", mm, ") SL.glmnet(..., alpha = alpha)", sep = "")))
-}}
-
-create.SL.glmnet(alphan = c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9))
-
-SL.library <- c(paste("SL.glmnet.", c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9), sep = ""),
-                paste("SL.randomForest.", seq(nrow(tuneGrid)), sep = ""))
-
-Y = as.numeric(train$Survived) - 1 #avoid using subset because we need a value and not a data frame, must be binary (0 or 1) ONLY
-X = subset(train, select = -Survived)
-
-
-#~~ Crossvalidated SuperLearner meta model of crossvalideted models - PREDICTIONS NOT WORKING????
-
-cl <- makeCluster(2)
-registerDoParallel()
-fitSL.CV <- CV.SuperLearner(Y = Y, X = X,
-                            SL.library = SL.library,
-                            family = binomial(),
-                            V = 5,
-                            method = "method.AUC",
-                            control = list(saveFitLibrary = TRUE),
-                            cvControl = list(V = 5, stratifyCV = TRUE),
-                            verbose = TRUE,
-                            saveAll = TRUE,
-                            ) #parallel = "multicore" / cl, not working
-stopCluster(cl)
-registerDoSEQ()
-closeAllConnections()
-summary(fitSL.CV)
-#fitSL.CV$control$saveFitLibrary <- TRUE
-#fitSL.CV$whichScreen <- t(as.matrix(rep(TRUE, length(SL.library))))
-plot.CV.SuperLearner(fitSL.CV)
-fitSL.CVreco <- recombineCVSL(fitSL.CV, method = "method.NNLS", verbose = TRUE, saveAll = TRUE)
-predictedValues <- predict.SuperLearner(fitSL.CV, newdata = test, X = X, Y = Y, onlySL = TRUE)
+Y <- as.numeric(train$Survived) - 1 #avoid using subset because we need a value and not a data frame, must be binary (0 or 1) ONLY
+X <- subset(train, select = -Survived)
 
 
 #~~ SuperLearner meta model of crossvalidated models
@@ -261,31 +276,17 @@ fitSL <- SuperLearner(Y = Y, X = X,
                       control = list(saveFitLibrary = TRUE),
                       cvControl = list(V = 5, stratifyCV = TRUE),
                       verbose = TRUE)
+#fitSL <- SuperLearner(Y = Y, X = X, SL.library = c(paste("model.cforest", 4:11, sep = "")), family = binomial(), method = "method.AUC", control = list(saveFitLibrary = TRUE), cvControl = list(V = 5, stratifyCV = TRUE), verbose = TRUE)
 stopCluster(cl)
 registerDoSEQ()
 closeAllConnections()
 fitSL
-fitSLreco <- recombineSL(fitSL, Y = Y, method = "method.NNLS", verbose = TRUE)
-fitSLreco
 predictedValues <- predict.SuperLearner(fitSL, newdata = test, X = X, Y = Y)
 
-
-#~~ Crossvalidated SuperLearner meta model of crossvalidated models using Subsemple - not a good idea
-
-cl <- makeCluster(2)
-registerDoParallel()
-fitSL <- subsemble(x = X, y = Y,
-                   family = binomial(),
-                   learner = SL.library,
-                   metalearner = "SL.glm",
-                   subsets = 1,
-                   cvControl = list(V = 5, stratifyCV = TRUE))  #learnControl = list(multiType = "divisor") = for fast if subsets > 1, requires length(learner) dividing number of subsets
-stopCluster(cl)
-registerDoSEQ()
-closeAllConnections()
-auc <- AUC(predictions = fitSL$pred, labels = Y)
-print(AUC)
-predictedValues <- predict(fitSL, newx = test)
+#methods: method.NNLS, method.NNLS2, method.NNloglik, method.CC_nloglik, method.AUC
+fitSLreco <- recombineSL(fitSL, Y = Y, method = "method.NNloglik", verbose = TRUE)
+fitSLreco
+predictedValues <- predict.SuperLearner(fitSLreco, newdata = test, X = X, Y = Y)
 
 
 
